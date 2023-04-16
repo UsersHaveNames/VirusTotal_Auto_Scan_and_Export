@@ -6,8 +6,8 @@ from tqdm import tqdm
 from pathlib import Path
 import threading
 from queue import Queue
-from threading import Semaphore
 from threading import Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class VirusTotalAnalyzer:
     def __init__(self, api_key):
@@ -44,7 +44,7 @@ class VirusTotalAnalyzer:
                 time.sleep(self.delay - time_since_last_call)
             self.last_api_call = time.time()
 
-    def process_file(self, file, analysis_results, queue, semaphore):
+    def process_file(self, file, analysis_results, queue):
         if not self.check_quota():
             print("Quota exceeded. The script will not execute.")
             return
@@ -79,7 +79,6 @@ class VirusTotalAnalyzer:
         attributes = response_data['data']['attributes']
         attributes['file_name'], attributes['url'] = str(file), url
         analysis_results[str(file)] = attributes
-        semaphore.release()  # Release the semaphore permit
         queue.put(1)  # Update the progress in the queue
 
     def process_files(self):
@@ -87,31 +86,14 @@ class VirusTotalAnalyzer:
         total_files = len(files)
 
         analysis_results = {}
-        threads = []
         q = Queue()
-        semaphore = Semaphore(8)  # Limit the number of concurrent threads to 8
 
-        with tqdm(total=total_files, desc="Processing files", unit="file") as pbar:
-            for file in files:
-                semaphore.acquire()  # Acquire a semaphore permit
-                t = threading.Thread(target=self.process_file, args=(file, analysis_results, q, semaphore))
-                t.start()
-                threads.append(t)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(self.process_file, file, analysis_results, q): file for file in files}
 
-                # Clean up finished threads and update the progress bar
-                remaining_threads = []
-                for t in threads:
-                    if not t.is_alive():
-                        t.join()
-                        pbar.update(q.get())
-                    else:
-                        remaining_threads.append(t)
-                threads = remaining_threads
-
-            # Wait for any remaining threads to finish
-            for t in threads:
-                t.join()
-                pbar.update(q.get())  # Update progress bar
+            with tqdm(total=total_files, desc="Processing files", unit="file") as pbar:
+                for future in as_completed(futures):
+                    pbar.update(q.get())  # Update progress bar
 
         # Save analysis results to output file
         with open(self.output_file, 'w', encoding='utf8') as f:
