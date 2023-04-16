@@ -92,8 +92,11 @@ class VirusTotalAnalyzer:
             futures = {executor.submit(self.process_file, file, analysis_results, q): file for file in files}
 
             with tqdm(total=total_files, desc="Processing files", unit="file") as pbar:
-                for future in as_completed(futures):
-                    pbar.update(q.get())  # Update progress bar
+                for future in futures:  # Update the progress bar immediately after submitting each task
+                    pbar.update(1)
+
+                for future in as_completed(futures):  # Wait for all futures to complete
+                    pass
 
         # Save analysis results to output file
         with open(self.output_file, 'w', encoding='utf8') as f:
