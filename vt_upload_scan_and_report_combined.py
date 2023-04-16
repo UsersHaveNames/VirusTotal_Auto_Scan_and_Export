@@ -48,7 +48,7 @@ class VirusTotalAnalyzer:
         if not self.check_quota():
             print("Quota exceeded. The script will not execute.")
             return
-        
+
         # Upload file to VirusTotal for analysis
         self.wait_for_next_api_call()  # Ensures API calls happen at a pre-defined rate
         with open(file, 'rb') as file_data:
@@ -60,6 +60,8 @@ class VirusTotalAnalyzer:
             print(f"\nError uploading file: {file}")
             queue.put(1)  # Update the progress in the queue
             return
+
+        queue.put(1)  # Update the progress in the queue after successful upload
 
         # Get analysis URL and ID
         url = upload_response['data']['links']['self']
@@ -75,15 +77,18 @@ class VirusTotalAnalyzer:
             if status == "completed":
                 break
 
+        queue.put(1)  # Update the progress in the queue after successful analysis
+
         # Store analysis attributes in results
         attributes = response_data['data']['attributes']
         attributes['file_name'], attributes['url'] = str(file), url
         analysis_results[str(file)] = attributes
-        queue.put(1)  # Update the progress in the queue
+        queue.put(1)  # Update the progress in the queue after storing analysis attributes
 
     def process_files(self):
         files = [f for f in self.source_folder.glob('**/*') if f.is_file() and not f.suffix.lower() in ('.txt', '.zip', '.json', '.py')]
         total_files = len(files)
+        total_stages = total_files * 3
 
         analysis_results = {}
         q = Queue()
@@ -91,12 +96,11 @@ class VirusTotalAnalyzer:
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self.process_file, file, analysis_results, q): file for file in files}
 
-            with tqdm(total=total_files, desc="Processing files", unit="file") as pbar:
-                for future in futures:  # Update the progress bar immediately after submitting each task
-                    pbar.update(1)
-
-                for future in as_completed(futures):  # Wait for all futures to complete
-                    pass
+            with tqdm(total=total_stages, desc="Processing files", unit="stage") as pbar:
+                while True:
+                    pbar.update(q.get())
+                    if pbar.n >= total_stages:
+                        break
 
         # Save analysis results to output file
         with open(self.output_file, 'w', encoding='utf8') as f:
@@ -111,3 +115,4 @@ if __name__ == '__main__':
     api_key = os.environ['VT_API_KEY']
     analyzer = VirusTotalAnalyzer(api_key)
     analyzer.process_files()
+    
